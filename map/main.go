@@ -13,10 +13,11 @@ import (
 	"github.com/golang/glog"
 	"golang.org/x/time/rate"
 	"google.golang.org/api/cloudresourcemanager/v1"
+	"google.golang.org/api/iterator"
 
+	asset "cloud.google.com/go/asset/apiv1"
 	"google.golang.org/api/iam/v1"
-	//asset "cloud.google.com/go/asset/apiv1"
-	//assetpb "google.golang.org/genproto/googleapis/cloud/asset/v1"
+	assetpb "google.golang.org/genproto/googleapis/cloud/asset/v1"
 )
 
 // go run main.go -v 20 -alsologtostderr
@@ -52,10 +53,11 @@ var (
 	pmutex    = &sync.Mutex{}
 	projectID = flag.String("projectID", "fabled-ray-104117", "GCP ProjetID")
 
-	organization    = flag.String("organization", "", "OrganizationID")
-	checkPermission = flag.String("checkPermission", "compute.instances.get", "Permission to check")
-	checkResource   = flag.String("checkResource", "projects/fabled-ray-104117/zones/us-central1-a/instances/external", "Permission to check")
-	projects        = make([]*cloudresourcemanager.Project, 0)
+	organization         = flag.String("organization", "", "OrganizationID")
+	checkPermission      = flag.String("checkPermission", "compute.instances.get", "Permission to check")
+	checkResource        = flag.String("checkResource", "projects/fabled-ray-104117/zones/us-central1-a/instances/external", "Permission to check")
+	useAssetInventoryAPI = flag.Bool("useAssetInventoryAPI", false, "Use AssetInventory API to get projects (requires cloudasset.assets.listResource)")
+	projects             = make([]*cloudresourcemanager.Project, 0)
 
 	permissions = &Permissions{}
 	roles       = &Roles{}
@@ -64,6 +66,7 @@ var (
 	ors     *iam.RolesService
 )
 
+//serviceusage.services.use
 func init() {
 }
 
@@ -103,6 +106,36 @@ func main() {
 		glog.Fatal(err)
 	}
 
+	// requires cloudasset.assets.listResource permissions
+	if *useAssetInventoryAPI {
+		assetClient, err := asset.NewClient(ctx)
+		if err != nil {
+			glog.Fatal(err)
+		}
+
+		assetType := "cloudresourcemanager.googleapis.com/Project"
+		req := &assetpb.SearchAllResourcesRequest{
+			Scope:      fmt.Sprintf("%s", *organization),
+			AssetTypes: []string{assetType},
+		}
+
+		// Call ListAssets API to get an asset iterator.
+		it := assetClient.SearchAllResources(ctx, req)
+
+		// Traverse and print the first 10 listed assets in response.
+		for i := 0; i < 10; i++ {
+			response, err := it.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				glog.Fatal(err)
+			}
+			// TODO: populate the project []string{} with values..
+			glog.V(2).Infof("     Project Name %s", response.Project)
+		}
+	}
+
 	glog.V(2).Infof("Getting Project Roles/Permissions")
 	// TODO: only get projects in the selected organization
 	preq := crmService.Projects.List()
@@ -116,6 +149,7 @@ func main() {
 	}); err != nil {
 		glog.Fatal(err)
 	}
+
 	for _, p := range projects {
 		parent := fmt.Sprintf("projects/%s", p.ProjectId)
 		err = generateMap(ctx, parent, "permissions_"+p.ProjectId+".json", "roles_"+p.ProjectId+".json")

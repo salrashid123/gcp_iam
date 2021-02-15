@@ -4,7 +4,7 @@
 
 Simple application to enumerate all Google Cloud `Permissions->Roles` and `Roles->Permissions` to JSON.
 
-To use this, you must have `roles/iam.securityReviewer` role assigned to the current user or service account at the organization level.
+To use this, you must have `Organization Role Viewer` and `Organization Viewer`  roles assigned to the current user or service account at the organization level.
 
 First find the organization ID number:
 
@@ -100,3 +100,8 @@ You can use the cloud console to map the roles-permissions:
 ![images/permission_role.png](images/permission_role.png)
 
 ![images/role_permission.png](images/role_permission.png)
+
+
+### Using Asset Inventory to iterate Projects/Organization
+
+If you want to iterate projects using asset-inventory API, assign the user `Cloud Asset Viewer` role at org level and the `serviceusage.services.use` _permission_ on the project that is configured with `gcloud config list`.  Once that is done, specify `--useAssetInventoryAPI`
