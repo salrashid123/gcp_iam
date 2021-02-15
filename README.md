@@ -16,10 +16,10 @@ At this point, you know the Role `Ro1` is overprovisioned on `Re1` since the per
 
     
 From there the user can ask 
-  "which of these permissions the resource supports [a,b,s,t] do *I* have on `Re1`:
+  "which of all permissions the resource supports do **I** have:
     The response maybe `[a,s]`
 
-  If the predefined role (eg, use `map/`) or another user that can access the resource has permissions `[a,b,t]`, you would know that the permission missing maybe just `[b,t]` and `[s]` is not necessary.
+  If a predefined role or another user that can access the resource has permissions `[a,b,t]`, you would know that the permission missing maybe just `[b,t]` and `[s]` is not necessary.
 
 This utility is primarily for information only...I'm not suggesting to go down the discrete role->permission route just yet (that would be a management nightmare quickly with out additional tools).
 
