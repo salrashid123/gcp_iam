@@ -115,12 +115,19 @@ If you want to iterate projects using asset-inventory API, assign the user `Clou
 
 If you want to display the `Roles` <-> `Permissions` as a graph, run the map application with `--generateGraphDB` option and redirect the output as such (remember to reduce the log level to 0)
 
+eg
 ```bash
 go run main.go -v 0 -alsologtostderr --organization 673208786098 --generateGraphDB > /tmp/graph.groovy
 ```
 
 The output file will contain raw groovy command set which you can import into JanusGraph
 
+If you just want to see the default graph/map for roles-permissions (not including custom roles, just load the static file into [Cytoscape](https://cytoscape.org/))
+
+The `--mode` switch in the command line will either 
+- (default) iterate of the standard roles/permissions
+- `--mode=project`: iterate of project-level roles/permissions
+- `--mode=organization`: iterate over organization-level roles/permissions
 
 #### Install JanusGraph
 
@@ -170,8 +177,9 @@ gremlin>
 
 Run Exporter
 
-
+```bash
 go run main.go -v 0 -alsologtostderr --organization 673208786098 --generateGraphDB > /tmp/graph.groovy
+```
 
 Load output file
 
@@ -227,9 +235,10 @@ gremlin> g.V().hasLabel('permission').where(out().hasId(i)).valueMap()
 ==>{name=[accessapproval.requests.list]}
 ==>{name=[accessapproval.settings.get]}
 ```
+#### Load Graph to CytoScape
 
 
-For Cytoscape, export graph to GraphML file:
+For [Cytoscape](https://cytoscape.org/), export graph to GraphML file:
 
 ```
 gremlin> sg = g.V().outE().subgraph('sg').cap('sg').next()

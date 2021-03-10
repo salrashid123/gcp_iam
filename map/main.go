@@ -61,6 +61,7 @@ var (
 	checkResource        = flag.String("checkResource", "projects/fabled-ray-104117/zones/us-central1-a/instances/external", "Permission to check")
 	useAssetInventoryAPI = flag.Bool("useAssetInventoryAPI", false, "Use AssetInventory API to get projects (requires cloudasset.assets.listResource)")
 	generateGraphDB      = flag.Bool("generateGraphDB", false, "Generate GraphDB output (.groovy)")
+	mode                 = flag.String("mode", "default", "Interation mode: organization|project|default")
 	projects             = make([]*cloudresourcemanager.Project, 0)
 
 	permissions = &Permissions{}
@@ -91,84 +92,90 @@ func main() {
 
 	limiter = rate.NewLimiter(rate.Limit(maxRequestsPerSecond), burst)
 
-	glog.V(2).Infof("Getting Organization Roles/Permissions")
+	switch *mode {
+	case "organization":
+		glog.V(2).Infof("Getting Organization Roles/Permissions")
 
-	if *organization == "" {
-		glog.Error(errors.New("--organization value must be set"))
-		return
-	}
-	oreq, err := crmService.Organizations.Get(fmt.Sprintf("organizations/%s", *organization)).Do()
-	if err != nil {
-		glog.Fatal(err)
-	}
-	glog.V(2).Infof("     Organization Name %s", oreq.Name)
-	*organization = oreq.Name
+		if *organization == "" {
+			glog.Error(errors.New("--organization value must be set"))
+			return
+		}
+		oreq, err := crmService.Organizations.Get(fmt.Sprintf("organizations/%s", *organization)).Do()
+		if err != nil {
+			glog.Fatal(err)
+		}
+		glog.V(2).Infof("     Organization Name %s", oreq.Name)
+		*organization = oreq.Name
 
-	parent := fmt.Sprintf(*organization)
-	// err = generateMap(ctx, parent, "permissions_organization.json", "roles_organization.json")
-	// if err != nil {
-	// 	glog.Fatal(err)
-	// }
+		parent := fmt.Sprintf(*organization)
 
-	// requires cloudasset.assets.listResource permissions
-	if *useAssetInventoryAPI {
-		assetClient, err := asset.NewClient(ctx)
+		// A) for Organization Roles
+		err = generateMap(ctx, parent, "permissions_organization.json", "roles_organization.json")
 		if err != nil {
 			glog.Fatal(err)
 		}
 
-		assetType := "cloudresourcemanager.googleapis.com/Project"
-		req := &assetpb.SearchAllResourcesRequest{
-			Scope:      fmt.Sprintf("%s", *organization),
-			AssetTypes: []string{assetType},
-		}
-
-		// Call ListAssets API to get an asset iterator.
-		it := assetClient.SearchAllResources(ctx, req)
-
-		// Traverse and print the first 10 listed assets in response.
-		for i := 0; i < 10; i++ {
-			response, err := it.Next()
-			if err == iterator.Done {
-				break
-			}
+		// requires cloudasset.assets.listResource permissions
+		if *useAssetInventoryAPI {
+			assetClient, err := asset.NewClient(ctx)
 			if err != nil {
 				glog.Fatal(err)
 			}
-			// TODO: populate the project []string{} with values..
-			glog.V(2).Infof("     Project Name %s", response.Project)
+
+			assetType := "cloudresourcemanager.googleapis.com/Project"
+			req := &assetpb.SearchAllResourcesRequest{
+				Scope:      fmt.Sprintf("%s", *organization),
+				AssetTypes: []string{assetType},
+			}
+
+			// Call ListAssets API to get an asset iterator.
+			it := assetClient.SearchAllResources(ctx, req)
+
+			// Traverse and print the first 10 listed assets in response.
+			for i := 0; i < 10; i++ {
+				response, err := it.Next()
+				if err == iterator.Done {
+					break
+				}
+				if err != nil {
+					glog.Fatal(err)
+				}
+				// TODO: populate the project []string{} with values..
+				glog.V(2).Infof("     Project Name %s", response.Project)
+			}
+		}
+
+	case "project":
+		// B) for Project Roles
+		glog.V(2).Infof("Getting Project Roles/Permissions")
+		// TODO: only get projects in the selected organization
+		preq := crmService.Projects.List()
+		if err := preq.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
+			for _, p := range page.Projects {
+				if p.LifecycleState == "ACTIVE" {
+					projects = append(projects, p)
+				}
+			}
+			return nil
+		}); err != nil {
+			glog.Fatal(err)
+		}
+		for _, p := range projects {
+			parent := fmt.Sprintf("projects/%s", p.ProjectId)
+			err = generateMap(ctx, parent, "permissions_"+p.ProjectId+".json", "roles_"+p.ProjectId+".json")
+			if err != nil {
+				glog.Fatal(err)
+			}
+		}
+	default:
+
+		glog.V(2).Infof("Getting Default Roles/Permissions")
+		parent := ""
+		err = generateMap(ctx, parent, "permissions_default.json", "roles_default.json")
+		if err != nil {
+			glog.Fatal(err)
 		}
 	}
-
-	// glog.V(2).Infof("Getting Project Roles/Permissions")
-	// // TODO: only get projects in the selected organization
-	// preq := crmService.Projects.List()
-	// if err := preq.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
-	// 	for _, p := range page.Projects {
-	// 		if p.LifecycleState == "ACTIVE" {
-	// 			projects = append(projects, p)
-	// 		}
-	// 	}
-	// 	return nil
-	// }); err != nil {
-	// 	glog.Fatal(err)
-	// }
-
-	// for _, p := range projects {
-	// 	parent := fmt.Sprintf("projects/%s", p.ProjectId)
-	// 	err = generateMap(ctx, parent, "permissions_"+p.ProjectId+".json", "roles_"+p.ProjectId+".json")
-	// 	if err != nil {
-	// 		glog.Fatal(err)
-	// 	}
-	// }
-
-	glog.V(2).Infof("Getting Default Roles/Permissions")
-	parent = ""
-	err = generateMap(ctx, parent, "permissions_default.json", "roles_default.json")
-	if err != nil {
-		glog.Fatal(err)
-	}
-
 	if *generateGraphDB {
 		glog.V(2).Infof("Generating GraphDB output")
 		for _, p := range permissions.Permissions {
