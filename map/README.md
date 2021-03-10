@@ -275,3 +275,16 @@ then ofcourse if you want to graph waldo and his neighbors
 ![images/waldo.png](images/waldo.png)
 
 yeah, thats the limit of how much useful stuff i know with cytoscape
+
+
+If you want to export the janusgraph to grapSON
+
+```groovy
+sg = g.V().outE().subgraph('sg').cap('sg').next()
+file = new FileOutputStream("/tmp/graph.json")
+mapper = GraphSONMapper.build().addCustomModule(org.janusgraph.graphdb.tinkerpop.io.graphson.JanusGraphSONModuleV2d0.getInstance()).create()
+writer = GraphSONWriter.build().mapper(mapper).create()
+writer.writeGraph(file, sg)
+```
+
+you can find example defautl roles/permissions under the `map/example/` folder
