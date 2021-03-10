@@ -8,6 +8,8 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/golang/glog"
@@ -16,6 +18,7 @@ import (
 	"google.golang.org/api/iterator"
 
 	asset "cloud.google.com/go/asset/apiv1"
+	//"github.com/go-gremlin/gremlin"
 	"google.golang.org/api/iam/v1"
 	assetpb "google.golang.org/genproto/googleapis/cloud/asset/v1"
 )
@@ -49,14 +52,15 @@ const (
 )
 
 var (
-	cmutex    = &sync.Mutex{}
-	pmutex    = &sync.Mutex{}
-	projectID = flag.String("projectID", "fabled-ray-104117", "GCP ProjetID")
-
+	cmutex               = &sync.Mutex{}
+	pmutex               = &sync.Mutex{}
+	projectID            = flag.String("projectID", "fabled-ray-104117", "GCP ProjetID")
+	addr                 = flag.String("gremlin-server", os.Getenv("GREMLIN_SERVER"), "gremlin server address")
 	organization         = flag.String("organization", "", "OrganizationID")
 	checkPermission      = flag.String("checkPermission", "compute.instances.get", "Permission to check")
 	checkResource        = flag.String("checkResource", "projects/fabled-ray-104117/zones/us-central1-a/instances/external", "Permission to check")
 	useAssetInventoryAPI = flag.Bool("useAssetInventoryAPI", false, "Use AssetInventory API to get projects (requires cloudasset.assets.listResource)")
+	generateGraphDB      = flag.Bool("generateGraphDB", false, "Generate GraphDB output (.groovy)")
 	projects             = make([]*cloudresourcemanager.Project, 0)
 
 	permissions = &Permissions{}
@@ -101,10 +105,10 @@ func main() {
 	*organization = oreq.Name
 
 	parent := fmt.Sprintf(*organization)
-	err = generateMap(ctx, parent, "permissions_organization.json", "roles_organization.json")
-	if err != nil {
-		glog.Fatal(err)
-	}
+	// err = generateMap(ctx, parent, "permissions_organization.json", "roles_organization.json")
+	// if err != nil {
+	// 	glog.Fatal(err)
+	// }
 
 	// requires cloudasset.assets.listResource permissions
 	if *useAssetInventoryAPI {
@@ -136,27 +140,27 @@ func main() {
 		}
 	}
 
-	glog.V(2).Infof("Getting Project Roles/Permissions")
-	// TODO: only get projects in the selected organization
-	preq := crmService.Projects.List()
-	if err := preq.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
-		for _, p := range page.Projects {
-			if p.LifecycleState == "ACTIVE" {
-				projects = append(projects, p)
-			}
-		}
-		return nil
-	}); err != nil {
-		glog.Fatal(err)
-	}
+	// glog.V(2).Infof("Getting Project Roles/Permissions")
+	// // TODO: only get projects in the selected organization
+	// preq := crmService.Projects.List()
+	// if err := preq.Pages(ctx, func(page *cloudresourcemanager.ListProjectsResponse) error {
+	// 	for _, p := range page.Projects {
+	// 		if p.LifecycleState == "ACTIVE" {
+	// 			projects = append(projects, p)
+	// 		}
+	// 	}
+	// 	return nil
+	// }); err != nil {
+	// 	glog.Fatal(err)
+	// }
 
-	for _, p := range projects {
-		parent := fmt.Sprintf("projects/%s", p.ProjectId)
-		err = generateMap(ctx, parent, "permissions_"+p.ProjectId+".json", "roles_"+p.ProjectId+".json")
-		if err != nil {
-			glog.Fatal(err)
-		}
-	}
+	// for _, p := range projects {
+	// 	parent := fmt.Sprintf("projects/%s", p.ProjectId)
+	// 	err = generateMap(ctx, parent, "permissions_"+p.ProjectId+".json", "roles_"+p.ProjectId+".json")
+	// 	if err != nil {
+	// 		glog.Fatal(err)
+	// 	}
+	// }
 
 	glog.V(2).Infof("Getting Default Roles/Permissions")
 	parent = ""
@@ -165,7 +169,39 @@ func main() {
 		glog.Fatal(err)
 	}
 
+	if *generateGraphDB {
+		glog.V(2).Infof("Generating GraphDB output")
+		for _, p := range permissions.Permissions {
+
+			entry := `	
+if (g.V().hasLabel('permission').has('name','%s').hasNext() == false) {
+ g.addV('permission').property(label, 'permission').property('name', '%s').id().next()
+}
+`
+			entry = fmt.Sprintf(entry, p.Name, p.Name)
+			fmt.Printf("%s", entry)
+		}
+
+		for _, r := range roles.Roles {
+
+			rr := `	
+v2 = g.addV('role').property(label, 'role').property('name', '%s').property('title', '%s').property('description', '%s').property('stage', '%s').property('deleted', %t).next()
+`
+			rr = fmt.Sprintf(rr, r.Name, r.Role.Title, strings.Replace(r.Role.Description, "'", "\\'", -1), r.Role.Stage, r.Role.Deleted)
+			fmt.Printf("%s", rr)
+			for _, p := range r.IncludedPermissions {
+				rc := `	
+v1 = g.V().hasLabel('permission').has('name', '%s').next()
+e1 = g.V(v1).addE('in').to(v2).next()
+`
+				rc = fmt.Sprintf(rc, p)
+
+				fmt.Printf("%s", rc)
+			}
+		}
+	}
 	glog.V(2).Infof("done")
+
 }
 
 func generateMap(ctx context.Context, parent, permissionFileName, rolesFileName string) error {
