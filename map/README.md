@@ -86,6 +86,16 @@ That is, if a Role has permissions [a,b,c], they will be listed in the output.  
 
 Note, the [PermissionService](https://pkg.go.dev/google.golang.org/api/iam/v1#PermissionsService) does not have an API to list all permissions by itself.
 
+### For the really impatient
+
+The `example/` folder contains various files for the DEFAULT iam roles permissions as of `March,2021`
+
+* `permissions_default.json`:  default permissions in an org
+* `roles_default.json`: default roles in an org
+* `graph.groovy.gz`: [groovy](http://groovy.apache.org/) graph representation of permissions<->roles
+* `graph.xml.gz`: [graphML](https://tinkerpop.apache.org/docs/current/reference/#graphml) graph representation of permissions<->roles
+* `graph.json.gz`: [graphSON](https://tinkerpop.apache.org/docs/current/reference/#graphson) graph representation of permissions<->roles
+
 ### BigQuery Exports 
 
 This script is equivalent to running an export of [GCP Policy Export to ](https://cloud.google.com/asset-inventory/docs/analyzing-iam-policy-longrunning-bigquery)
