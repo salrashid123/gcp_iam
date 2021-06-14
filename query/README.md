@@ -2,15 +2,85 @@
 ## IAM Permission Verification
 
 
-Utility functions which testes if the current user or serviceAccount has the subset of permissions that could potentially apply to a Resource.
+Utility functions for IAM Permissions troubleshooting:
 
-In other words, if a Resource can potentially have permissions `[A,B,C,E,F,G]`, this script will enumerate those as list which of those permissions the current user has (eg, maybe just `[B,F,G]` for example (bfg9K!)).
+- `A` As a user, which permissions do _i_ have on a resource
+  In other words, if a Resource can potentially have permissions `[A,B,C,E,F,G]`, this script will enumerate those as list which of those permissions the current user has (eg, maybe just `[B,F,G]`.  For example "of all the potential IAM roles on a GCS bucket, alice has `storage.objects.get`"
 
-This script utilizes an API functions many GCP Services now include:
+- `B` As an admin, which permissions and roles does a user have on a resource using [Asset Inventory API](https://cloud.google.com/asset-inventory/docs/apis)
+  An admin needs to know both the identity/group part of the iam binding and where in the resource hierarchy the grant was committed.  For example, if a user is a member of a group with is member of another group that has an IAM role granted at a project level, this script will trace back the hierarchy on both the [resource grant path](https://cloud.google.com/resource-manager/docs/cloud-platform-resource-hierarchy) and the one derived from being nested within groups.  eg:
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   \
+   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117" \
+    -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+
+I0614 07:15:07.776025 2063876 main.go:116] Getting AnalyzeIamPolicyRequest
+I0614 07:15:08.587882 2063876 main.go:164]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
+I0614 07:15:08.588146 2063876 main.go:165]         through role [permission:"storage.objects.get" role:"roles/storage.objectViewer" permission:"storage.objects.list"]
+I0614 07:15:08.588360 2063876 main.go:169]           which is applied to the resource directly
+I0614 07:15:08.588533 2063876 main.go:178]           and the user is included in the role binding through a group hierarchy: [user:user4@esodemoapp2.com  --> group:group4_7@esodemoapp2.com   --> group:group_of_groups_1@esodemoapp2.com 
+```
+
+This utility also uses [Policy Troubleshooter](https://cloud.google.com/iam/docs/troubleshooting-access) API to help derive the set of permissions that granted or denied access. However, that API is quite difficult to understand so I approached deriving the data for `B` using `analyzeIamPolicy` api instead.
+
+
+- `C` As an admin, determine if a user has accesss to a resource using the [PolicyTroubleshooter API](https://cloud.google.com/iam/docs/reference/policytroubleshooter/rest) to help answer question `B`.
+   However, it does not seem to elaborate on the group hierarchy nor the IAM resource hierarchy
+
+```log
+ go run main.go   --checkResource="//storage.googleapis.com/projects/_/buckets/fabled-ray-104117-bucket"   --identity="user4@esodemoapp2.com"  \
+   --usePolicyTroubleshooter --permissionToCheck=storage.objects.get --projectID fabled-ray-104117    -v 20 -alsologtostderr 
+
+I0613 14:24:31.180394 1974747 main.go:183] Getting PolicyTroubleshooter
+I0613 14:24:32.138580 1974747 main.go:215]    User's AccessState GRANTED
+I0613 14:24:32.138751 1974747 main.go:219]    User's AccessState granted at //cloudresourcemanager.googleapis.com/projects/fabled-ray-104117
+I0613 14:24:32.142876 1974747 main.go:225]    within which the user has binding with permission via roles roles/storage.objectViewer
+I0613 14:24:32.142984 1974747 main.go:226]    through membership map[group:group_of_groups_1@esodemoapp2.com:membership:MEMBERSHIP_INCLUDED  relevance:HIGH]
+```
+
+as of 5/14/21, the script is geared towards why a user _does_ have access vs why the identity does not.
+
+the larger question is...which apis should i use? IMO, the AssetAPI provides a more robust map of the permissions and allows you to recurse serviceAccount impersonation in offline mode as well.
+
+Do not use APIs `B` or `C` for live serving path IAM validation:  these are just too slow and intended for administration and backend offline checks.
+
+---
+
+>> This repo is NOT supported by google and is very experimental.  Do not use in production.
+
+---
+
+References:
 
 - [Testing Permissions](https://cloud.google.com/iam/docs/testing-permissions)
 - [QueryTestablePermissions](https://pkg.go.dev/google.golang.org/api/iam/v1#PermissionsService.QueryTestablePermissions)
+- [Troubleshooting access using Policy Troubleshooter](https://cloud.google.com/iam/docs/troubleshooting-access)
 - [Testable IAM Resource Names](https://cloud.google.com/iam/docs/full-resource-names)
+- [Analyzing IAM Policy](https://cloud.google.com/asset-inventory/docs/analyzing-iam-policy)
+- [analyzeIamPolicy](https://cloud.google.com/asset-inventory/docs/reference/rest/v1p4beta1/TopLevel/analyzeIamPolicy)
+- [IamPolicyAnalysisQuery Advanced Options](https://cloud.google.com/asset-inventory/docs/reference/rest/v1/IamPolicyAnalysisQuery#options)
+- [Determining what access a principal has on a resource](https://cloud.google.com/asset-inventory/docs/analyzing-iam-policy#access-query)
+
+---
+
+Provided utility accepts the following parameters
+
+| Option | Description |
+|:------------|-------------|
+| **`checkResource`** | `string` The canonical resource name to verify |
+| **`identity`** | `string` The user or serviceAccount to verify |
+| **`scope`** | `string` Scanning scope (`projects/projectID`,`organization/organizationNumber`)|
+| **`useIAMPolicyRequest`** | `bool` Invoke `AnalyzeIamPolicyRequest` on the resource and user (`default: false`) |
+| **`usePolicyTroubleshooter`** | `bool` Invoke ` IAM Policy Troubleshooter api` on the resource and user (`default: false`) |
+| **`enableImpersonatedCheck`** | `bool` Enable a check to see if the user can impersonate and account and then get access on the resource  (`default: false`) |
+| **`gcsDestinationForLongRunningAnalysis`** | `string` GCS bucket where longrunning IAM impersonation checks are stored (in format `gs://bucket`) |
+
+If run with high verbosity (`-v 20 -alsologtostderr`) output of the script, the current applicable permissions are listed and after that, each of those are tested against the resource.  Any permission that succeeds will be shown below the segment `User permission  on resource:`
+
+---
+
+## A: Which Permissions do I have
 
 The sample here can evaluate the following resource types
 
@@ -30,16 +100,6 @@ The sample here can evaluate the following resource types
 
 GCP accepts many other resource that can be verified (just look for resources that have [`TestIAMPermission()`](https://pkg.go.dev/google.golang.org/api/iam/v1#TestIamPermissionsRequest) api enabled)
 
-Provided utility accepts the following parameters
-
-| Option | Description |
-|:------------|-------------|
-| **`checkResource`** | `string` The canonical resource name to verify |
-| **`identity`** | `string` The user or serviceAccount to verify |
-| **`scope`** | `string` Scanning scope (`projects/projectID`,`organization/organizationNumber`)|
-| **`useIAMPolicyRequest`** | `bool` Invoke `AnalyzeIamPolicyRequest` on the resource and user (`default: false`) |
-
-If run with high verbosity (`-v 20 -alsologtostderr`) output of the script, the current applicable permissions are listed and after that, each of those are tested against the resource.  Any permission that succeeds will be shown below the segment `User permission  on resource:`
 
 
 ### BigQuery Tables
@@ -47,7 +107,6 @@ If run with high verbosity (`-v 20 -alsologtostderr`) output of the script, the 
 ```bash
 $ go run main.go \
   --checkResource="//bigquery.googleapis.com/projects/fabled-ray-104117/datasets/test/tables/person" \
-  --identity="user4@esodemoapp2.com" \
   --scope="projects/fabled-ray-104117" \
   -v 20 -alsologtostderr
 
@@ -80,7 +139,6 @@ The following shows the output if the user has
 ```bash
 $ go run main.go \
   --checkResource="//iam.googleapis.com/projects/fabled-ray-104117/serviceAccounts/kms-svc-account@fabled-ray-104117.iam.gserviceaccount.com" \
-  --identity="user4@esodemoapp2.com" \
   --scope="projects/fabled-ray-104117" \
   -v 20 -alsologtostderr
 
@@ -116,7 +174,6 @@ or  `ServiceAccount TokenCreator`
 ```bash
 $ go run main.go \
   --checkResource="//iam.googleapis.com/projects/fabled-ray-104117/serviceAccounts/kms-svc-account@fabled-ray-104117.iam.gserviceaccount.com" \
-  --identity="user4@esodemoapp2.com" \
   --scope="projects/fabled-ray-104117" \
   -v 20 -alsologtostderr
 
@@ -162,7 +219,6 @@ The documentation links above mention support but so far i do not think this cap
 ```bash
 go run main.go \
   --checkResource="//iam.googleapis.com/projects/fabled-ray-104117/serviceAccounts/kms-svc-account@fabled-ray-104117.iam.gserviceaccount.com/keys/4d7bbaf8369e2219b657e9e09cf9d2ec785376a9" \
-  --identity="user4@esodemoapp2.com" \
   --scope="projects/fabled-ray-104117" \
   -v 20 -alsologtostderr
 ```
@@ -175,7 +231,6 @@ go run main.go \
 ```bash
 $ go run main.go \
   --checkResource="//iap.googleapis.com/projects/248066739582/iap_web/appengine-fabled-ray-104117/services/default" \
-  --identity="user4@esodemoapp2.com" \
   --scope="projects/fabled-ray-104117" \
   -v 20 -alsologtostderr
 
@@ -203,7 +258,6 @@ $ go run main.go \
 ```bash
 $ go run main.go \
   --checkResource="//iap.googleapis.com/projects/248066739582/iap_web/compute/services/1860257571542433058" \
-  --identity="user4@esodemoapp2.com" \
   --scope="projects/fabled-ray-104117" \
   -v 20 -alsologtostderr
 
@@ -228,7 +282,6 @@ $ go run main.go \
 ```bash
 $ go run main.go \
   --checkResource="//spanner.googleapis.com/projects/fabled-ray-104117/instances/spanner-1" \
-  --identity="user4@esodemoapp2.com" \
   --scope="projects/fabled-ray-104117" \
   -v 20 -alsologtostderr
 
@@ -283,7 +336,6 @@ $ go run main.go \
 ```bash
 $ go run main.go \
   --checkResource="//storage.googleapis.com/projects/_/buckets/fabled-ray-104117-bucket" \
-  --identity="user4@esodemoapp2.com" \
   --scope="projects/fabled-ray-104117" \
   -v 20 -alsologtostderr
 
@@ -311,12 +363,12 @@ $ go run main.go \
     I0214 14:17:26.660570  397623 main.go:165]      storage.objects.list
 ```
 
+Note:  for GCS, the resource name cited there is [compatible with IAM](https://cloud.google.com/iam/docs/full-resource-names) but the response resource name could be different (eg, GCS may return a resource name as `//storage.googleapis.com/projects/_/buckets/fabled-ray-104117-bucket` as `//storage.googleapis.com/fabled-ray-104117-bucket` )
 
 ### GCE Instance
 
 ```bash
 go run main.go --checkResource="//compute.googleapis.com/projects/fabled-ray-104117/zones/us-central1-a/instances/external"  \
-      --identity="user4@esodemoapp2.com"   \
       --scope="projects/fabled-ray-104117" \
       -v 20 -alsologtostderr
 
@@ -359,7 +411,6 @@ TestIAMPermissions does not exist with [ComputeEngine Networks](https://cloud.go
 
 ```bash
 go run main.go --checkResource="//compute.googleapis.com/projects/fabled-ray-104117/global/networks/default"  \
-      --identity="user4@esodemoapp2.com"   \
       --scope="projects/fabled-ray-104117" \
       -v 20 -alsologtostderr
 ```
@@ -368,7 +419,6 @@ go run main.go --checkResource="//compute.googleapis.com/projects/fabled-ray-104
 	
 ```bash
 go run main.go --checkResource="//compute.googleapis.com/projects/fabled-ray-104117/regions/us-central1/subnetworks/default"  \
-      --identity="user4@esodemoapp2.com"   \
       --scope="projects/fabled-ray-104117" \
       -v 20 -alsologtostderr
 
@@ -400,7 +450,6 @@ TestIAMPermissions does not exist with [Kubernetes Engine Cluster](https://cloud
 	
 ```bash
 go run main.go --checkResource="//container.googleapis.com/projects/fabled-ray-104117/clusters/cluster-1"  \
-      --identity="user4@esodemoapp2.com"   \
       --scope="projects/fabled-ray-104117" \
       -v 20 -alsologtostderr
 
@@ -427,7 +476,6 @@ Assume the current user has org-level IAM permissions
 	
 ```bash
 go run main.go --checkResource="//cloudresourcemanager.googleapis.com/organizations/673208786098"  \
-      --identity="user4@esodemoapp2.com"   \
       --scope="organization/673208786098" \
       -v 20 -alsologtostderr
 
@@ -455,7 +503,9 @@ go run main.go --checkResource="//cloudresourcemanager.googleapis.com/organizati
 In the example below, the user has a customer role (custom in this case) with just `iap.tunnelInstances.accessViaIAP`
 
 ```bash
-$ go run main.go --checkResource="//cloudresourcemanager.googleapis.com/projects/fabled-ray-104117"        --identity="user4@esodemoapp2.com"         --scope="projects/fabled-ray-104117"       -v 10 -alsologtostderr
+$ go run main.go --checkResource="//cloudresourcemanager.googleapis.com/projects/fabled-ray-104117"   \
+    --scope="projects/fabled-ray-104117" \
+    -v 10 -alsologtostderr
   I0214 22:27:19.213100  480876 main.go:77] ================ QueryTestablePermissions with Resource ======================
   I0214 22:27:40.903787  480876 main.go:118] Testable permissions on resource :
   I0214 22:27:40.903845  480876 main.go:120]      accessapproval.requests.approve
@@ -470,37 +520,185 @@ $ go run main.go --checkResource="//cloudresourcemanager.googleapis.com/projects
   I0214 22:27:49.709987  480876 main.go:586]      iap.tunnelInstances.accessViaIAP
 ```
 
-### Misc
+---
 
-#### AnalyzeIamPolicy
+## B: Which Permissions and Roles does a user have on a resource
 
 Analyzes IAM policies to answer which identities have what accesses on which resources.  
 
 This flag is intended to be used only by a domain Administrator to check which policies are in effect for a given user.  It is NOT intended to be used by a user checking if he/she has access to a resource.
 
-See
-- [Analyzing IAM Policy](https://cloud.google.com/asset-inventory/docs/analyzing-iam-policy)
-- [analyzeIamPolicy](https://cloud.google.com/asset-inventory/docs/reference/rest/v1p4beta1/TopLevel/analyzeIamPolicy)
-
 Sample output when run by an administrator would show the resource and IAM Role the specified user (`user4@esodemoapp2.com`) has 
 
-```bash
-$ go run main.go \
-  --checkResource="//compute.googleapis.com/projects/fabled-ray-104117/zones/us-central1-a/instances/os-login" \
-  --identity="user4@esodemoapp2.com" \
-  --scope="projects/fabled-ray-104117"\
-  -v 20 -alsologtostderr \
-  --useIAMPolicyRequest
+NOTE, the examples below uses GCS which accepts two [resource name formats](https://cloud.google.com/iam/docs/full-resource-names):
 
-...
-...
-I0215 08:02:11.625255   26964 main.go:370]      compute.instances.useReadOnly
-I0215 08:02:11.625307   26964 main.go:370]      resourcemanager.resourceTagBindings.create
-I0215 08:02:11.625360   26964 main.go:370]      resourcemanager.resourceTagBindings.delete
-I0215 08:02:11.625412   26964 main.go:370]      resourcemanager.resourceTagBindings.list
-I0215 08:02:11.625707   26964 main.go:580] Getting AnalyzeIamPolicyRequest
-I0215 08:02:12.227826   26964 main.go:610]     AnalysisResults.Resources [full_resource_name:"//compute.googleapis.com/projects/fabled-ray-104117/zones/us-central1-a/instances/os-login"]
-I0215 08:02:12.227992   26964 main.go:611]     AnalysisResults.Accesses [role:"roles/compute.osLogin"]
+* `//storage.googleapis.com/projects/_/buckets/fabled-ray-104117-bucket`:  This is the canonical format 
+* `//storage.googleapis.com/fabled-ray-104117-bucket`: This is the format that GCS responds back with.
+
+We will be using the second, non-compliant format since the code checks the provided response value formats
+
+- `A` user does not have access
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+
+I0613 13:32:12.288088 1965268 main.go:108] Getting AnalyzeIamPolicyRequest
+I0613 13:32:12.772178 1965268 main.go:173]       user:user4@esodemoapp2.com does not access to resource //storage.googleapis.com/fabled-ray-104117-bucket
 ```
 
-AnalyzeIamPolicy currently executes synchronously and may not be complete in time (todo: use long running) 
+- `B` user has direct access to resource
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+
+I0613 13:33:27.323535 1965409 main.go:108] Getting AnalyzeIamPolicyRequest
+I0613 13:33:27.933501 1965409 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
+I0613 13:33:27.933746 1965409 main.go:155]         through role [role:"roles/storage.objectViewer"]
+I0613 13:33:27.933916 1965409 main.go:159]           which is applied to the resource directly
+I0613 13:33:27.934049 1965409 main.go:166]           and the user is directly included in the role binding directly
+```
+
+- `C` user is in a group with direct access
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+
+I0613 13:35:11.716311 1965696 main.go:108] Getting AnalyzeIamPolicyRequest
+I0613 13:35:12.484470 1965696 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
+I0613 13:35:12.484737 1965696 main.go:155]         through role [role:"roles/storage.objectViewer"]
+I0613 13:35:12.484919 1965696 main.go:159]           which is applied to the resource directly
+I0613 13:35:12.485073 1965696 main.go:168]           and the user is included in the role binding through a group hierarchy: [user:user4@esodemoapp2.com  --> group:group4_7@esodemoapp2.com ]
+```
+
+- `D` user is in a group of groups with direct access
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+
+I0613 13:37:39.204515 1965883 main.go:108] Getting AnalyzeIamPolicyRequest
+I0613 13:37:40.044236 1965883 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
+I0613 13:37:40.044462 1965883 main.go:155]         through role [role:"roles/storage.objectViewer"]
+I0613 13:37:40.044649 1965883 main.go:159]           which is applied to the resource directly
+I0613 13:37:40.044828 1965883 main.go:168]           and the user is included in the role binding through a group hierarchy: [user:user4@esodemoapp2.com  --> group:group4_7@esodemoapp2.com   --> group:group_of_groups_1@esodemoapp2.com ]
+```
+
+- `E` user has inherited direct bindings
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+
+I0613 13:39:59.101075 1966054 main.go:108] Getting AnalyzeIamPolicyRequest
+I0613 13:39:59.716914 1966054 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
+I0613 13:39:59.716990 1966054 main.go:155]         through role [role:"roles/storage.objectViewer"]
+I0613 13:39:59.717044 1966054 main.go:162]           which is inherited through resource ancestry [//storage.googleapis.com/fabled-ray-104117-bucket  --> //cloudresourcemanager.googleapis.com/projects/fabled-ray-104117 ]
+I0613 13:39:59.717090 1966054 main.go:166]           and the user is directly included in the role binding directly
+```
+
+- `F` user has inherited indirect group bindings
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+
+I0613 13:41:28.331944 1966215 main.go:108] Getting AnalyzeIamPolicyRequest
+I0613 13:41:28.911339 1966215 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
+I0613 13:41:28.911586 1966215 main.go:155]         through role [role:"roles/storage.objectViewer"]
+I0613 13:41:28.911761 1966215 main.go:162]           which is inherited through resource ancestry [//storage.googleapis.com/fabled-ray-104117-bucket  --> //cloudresourcemanager.googleapis.com/projects/fabled-ray-104117 ]
+I0613 13:41:28.911910 1966215 main.go:168]           and the user is included in the role binding through a group hierarchy: [user:user4@esodemoapp2.com  --> group:group4_7@esodemoapp2.com ]
+```
+
+- `G` user has inherited group of group indirect group bindings
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+
+I0613 13:44:03.290636 1966413 main.go:108] Getting AnalyzeIamPolicyRequest
+I0613 13:44:04.181190 1966413 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
+I0613 13:44:04.181437 1966413 main.go:155]         through role [role:"roles/storage.objectViewer"]
+I0613 13:44:04.181603 1966413 main.go:162]           which is inherited through resource ancestry [//storage.googleapis.com/fabled-ray-104117-bucket  --> //cloudresourcemanager.googleapis.com/projects/fabled-ray-104117 ]
+I0613 13:44:04.181749 1966413 main.go:168]           and the user is included in the role binding through a group hierarchy: [user:user4@esodemoapp2.com  --> group:group4_7@esodemoapp2.com   --> group:group_of_groups_1@esodemoapp2.com ]
+```
+
+- `H`: user can impersonate an account which has access to a resource
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"  \
+   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117 \
+   --enableImpersonatedCheck --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
+
+I0614 07:03:19.161728 2061522 main.go:116] Getting AnalyzeIamPolicyRequest
+I0614 07:03:21.788112 2061522 main.go:232]       Result written to gs://fabled-ray-104117-bucket/20210614110319
+I0614 07:03:22.058112 2061522 main.go:955]           user:user4@esodemoapp2.com can impersonate impersonated-account@fabled-ray-104117.iam.gserviceaccount.com
+I0614 07:03:22.058180 2061522 main.go:948]           serviceAccount:impersonated-account@fabled-ray-104117.iam.gserviceaccount.com has iam permissions roles/storage.objectViewer  on //storage.googleapis.com/fabled-ray-104117-bucket
+
+```
+
+- `I`: user can impersonate an account which impersonate another account that has access to a resource
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"  \
+    --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr  \
+    --useIAMPolicyRequest --projectID=fabled-ray-104117 \
+    --enableImpersonatedCheck --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
+
+I0614 07:05:02.239110 2061693 main.go:116] Getting AnalyzeIamPolicyRequest
+I0614 07:05:04.781068 2061693 main.go:232]       Result written to gs://fabled-ray-104117-bucket/20210614110502
+I0614 07:05:04.996068 2061693 main.go:955]           user:user4@esodemoapp2.com can impersonate recaptcha-sa@fabled-ray-104117.iam.gserviceaccount.com
+I0614 07:05:04.996492 2061693 main.go:955]           serviceAccount:recaptcha-sa@fabled-ray-104117.iam.gserviceaccount.com can impersonate impersonated-account@fabled-ray-104117.iam.gserviceaccount.com
+I0614 07:05:04.996567 2061693 main.go:948]           serviceAccount:impersonated-account@fabled-ray-104117.iam.gserviceaccount.com has iam permissions roles/storage.objectViewer  on //storage.googleapis.com/fabled-ray-104117-bucket
+```
+
+- `J`: user can impersonate two service accounts:  one with direct access to a resource, one that impersonates another service account with access to a resource
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"  \
+   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest \
+   --projectID=fabled-ray-104117 --enableImpersonatedCheck --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
+
+I0614 07:07:59.976997 2062996 main.go:116] Getting AnalyzeIamPolicyRequest
+I0614 07:08:02.577478 2062996 main.go:232]       Result written to gs://fabled-ray-104117-bucket/20210614110759
+I0614 07:08:02.813079 2062996 main.go:955]           user:user4@esodemoapp2.com can impersonate recaptcha-sa@fabled-ray-104117.iam.gserviceaccount.com
+I0614 07:08:02.813214 2062996 main.go:955]           serviceAccount:recaptcha-sa@fabled-ray-104117.iam.gserviceaccount.com can impersonate impersonated-account@fabled-ray-104117.iam.gserviceaccount.com
+I0614 07:08:02.813252 2062996 main.go:948]           serviceAccount:impersonated-account@fabled-ray-104117.iam.gserviceaccount.com has iam permissions roles/storage.objectViewer  on //storage.googleapis.com/fabled-ray-104117-bucket
+I0614 07:08:02.813332 2062996 main.go:955]           user:user4@esodemoapp2.com can impersonate impersonated-account@fabled-ray-104117.iam.gserviceaccount.com
+I0614 07:08:02.813362 2062996 main.go:948]           serviceAccount:impersonated-account@fabled-ray-104117.iam.gserviceaccount.com has iam permissions roles/storage.objectViewer  on //storage.googleapis.com/fabled-ray-104117-buck
+```
+
+- `K`: user can impersonate a service account but that account does not have permissions on the resource
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"  \
+   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest \
+   --projectID=fabled-ray-104117 --enableImpersonatedCheck --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
+
+I0614 07:28:02.485747 2068876 main.go:116] Getting AnalyzeIamPolicyRequest
+I0614 07:28:08.948430 2068876 main.go:232]       Result written to gs://fabled-ray-104117-bucket/20210614112802
+I0614 07:28:09.217923 2068876 main.go:955]           user:user4@esodemoapp2.com can impersonate impersonated-account@fabled-ray-104117.iam.gserviceaccount.com
+```
+
+- `L`: user is a member of a group which  can impersonate an account which impersonate another account that has access to a resource
+
+** Doesn't work **
+
+### PolicyTroubleshooter
+
+As mentioned, you can also use the PolicyTroubleshooter API to help answer question `B`.  However, it does not seem to elaborate on the group hierarchy nor the IAM resource hierarchy
+
+```bash
+ go run main.go   --checkResource="//storage.googleapis.com/projects/_/buckets/fabled-ray-104117-bucket"   --identity="user4@esodemoapp2.com"  \
+   --usePolicyTroubleshooter --permissionToCheck=storage.objects.get --projectID fabled-ray-104117    -v 20 -alsologtostderr 
+
+I0613 14:24:31.180394 1974747 main.go:183] Getting PolicyTroubleshooter
+I0613 14:24:32.138580 1974747 main.go:215]    User's AccessState GRANTED
+I0613 14:24:32.138751 1974747 main.go:219]    User's AccessState granted at //cloudresourcemanager.googleapis.com/projects/fabled-ray-104117
+I0613 14:24:32.142876 1974747 main.go:225]    within which the user has binding with permission via roles roles/storage.objectViewer
+I0613 14:24:32.142984 1974747 main.go:226]    through membership map[group:group_of_groups_1@esodemoapp2.com:membership:MEMBERSHIP_INCLUDED  relevance:HIGH]
+```
+
+which is equivalent to running:
+
+```bash
+gcloud policy-troubleshoot iam //storage.googleapis.com/projects/_/buckets/fabled-ray-104117-bucket    --permission=storage.objects.get --principal-email=user4@esodemoapp2.com
+```
+
+
+---
