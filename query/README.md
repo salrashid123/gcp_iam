@@ -73,7 +73,6 @@ Provided utility accepts the following parameters
 | **`scope`** | `string` Scanning scope (`projects/projectID`,`organization/organizationNumber`)|
 | **`useIAMPolicyRequest`** | `bool` Invoke `AnalyzeIamPolicyRequest` on the resource and user (`default: false`) |
 | **`usePolicyTroubleshooter`** | `bool` Invoke ` IAM Policy Troubleshooter api` on the resource and user (`default: false`) |
-| **`enableImpersonatedCheck`** | `bool` Enable a check to see if the user can impersonate and account and then get access on the resource  (`default: false`) |
 | **`gcsDestinationForLongRunningAnalysis`** | `string` GCS bucket where longrunning IAM impersonation checks are stored (in format `gs://bucket`) |
 
 If run with high verbosity (`-v 20 -alsologtostderr`) output of the script, the current applicable permissions are listed and after that, each of those are tested against the resource.  Any permission that succeeds will be shown below the segment `User permission  on resource:`
@@ -537,10 +536,14 @@ NOTE, the examples below uses GCS which accepts two [resource name formats](http
 
 We will be using the second, non-compliant format since the code checks the provided response value formats
 
+The code first attempts to use `AnalyzeIamPolicy` to acquire the map. If the MainAnalysis is `FullyExplored`, then we will render the map as-is.  If not, the program will run `AnalyzeIamPolicyLongrunningRequest` and save the output to a GCS bucket `gcsDestinationForLongRunningAnalysis`.  Note you must create this GCS bucket first and then have permissions to read and write to it.  For more information, see
+
+* [Writing policy analysis to Cloud Storage](https://cloud.google.com/asset-inventory/docs/analyzing-iam-policy-longrunning-cloud-storage)
+
 - `A` user does not have access
 
 ```log
-$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117 --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
 
 I0613 13:32:12.288088 1965268 main.go:108] Getting AnalyzeIamPolicyRequest
 I0613 13:32:12.772178 1965268 main.go:173]       user:user4@esodemoapp2.com does not access to resource //storage.googleapis.com/fabled-ray-104117-bucket
@@ -549,7 +552,7 @@ I0613 13:32:12.772178 1965268 main.go:173]       user:user4@esodemoapp2.com does
 - `B` user has direct access to resource
 
 ```log
-$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117 --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
 
 I0613 13:33:27.323535 1965409 main.go:108] Getting AnalyzeIamPolicyRequest
 I0613 13:33:27.933501 1965409 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
@@ -561,7 +564,7 @@ I0613 13:33:27.934049 1965409 main.go:166]           and the user is directly in
 - `C` user is in a group with direct access
 
 ```log
-$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117 --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
 
 I0613 13:35:11.716311 1965696 main.go:108] Getting AnalyzeIamPolicyRequest
 I0613 13:35:12.484470 1965696 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
@@ -573,7 +576,7 @@ I0613 13:35:12.485073 1965696 main.go:168]           and the user is included in
 - `D` user is in a group of groups with direct access
 
 ```log
-$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117 --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
 
 I0613 13:37:39.204515 1965883 main.go:108] Getting AnalyzeIamPolicyRequest
 I0613 13:37:40.044236 1965883 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
@@ -585,7 +588,7 @@ I0613 13:37:40.044828 1965883 main.go:168]           and the user is included in
 - `E` user has inherited direct bindings
 
 ```log
-$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117 --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
 
 I0613 13:39:59.101075 1966054 main.go:108] Getting AnalyzeIamPolicyRequest
 I0613 13:39:59.716914 1966054 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
@@ -597,7 +600,7 @@ I0613 13:39:59.717090 1966054 main.go:166]           and the user is directly in
 - `F` user has inherited indirect group bindings
 
 ```log
-$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117 --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
 
 I0613 13:41:28.331944 1966215 main.go:108] Getting AnalyzeIamPolicyRequest
 I0613 13:41:28.911339 1966215 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
@@ -609,7 +612,7 @@ I0613 13:41:28.911910 1966215 main.go:168]           and the user is included in
 - `G` user has inherited group of group indirect group bindings
 
 ```log
-$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"   --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest --projectID=fabled-ray-104117 --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
 
 I0613 13:44:03.290636 1966413 main.go:108] Getting AnalyzeIamPolicyRequest
 I0613 13:44:04.181190 1966413 main.go:154]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
@@ -647,12 +650,27 @@ I0614 07:05:04.996492 2061693 main.go:955]           serviceAccount:recaptcha-sa
 I0614 07:05:04.996567 2061693 main.go:948]           serviceAccount:impersonated-account@fabled-ray-104117.iam.gserviceaccount.com has iam permissions roles/storage.objectViewer  on //storage.googleapis.com/fabled-ray-104117-bucket
 ```
 
-- `J`: user can impersonate two service accounts:  one with direct access to a resource, one that impersonates another service account with access to a resource
+- `J`: user can impersonate a service accoun that has access to a bucket **AND** has direct access to that bucket
+
+```log
+$ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"  \
+    --identity="user:user4@esodemoapp2.com"     --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest    --projectID=fabled-ray-104117 --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
+
+I0622 09:22:31.428417 2936466 main.go:115] Getting AnalyzeIamPolicyRequest
+I0622 09:22:33.565845 2936466 main.go:162]       user:user4@esodemoapp2.com has access to resource [full_resource_name:"//storage.googleapis.com/fabled-ray-104117-bucket"]
+I0622 09:22:33.566010 2936466 main.go:163]         through [permission:"storage.objects.get" role:"roles/storage.objectViewer" permission:"storage.objects.list"]
+I0622 09:22:33.566135 2936466 main.go:167]           which is applied to the resource directly
+I0622 09:22:33.566233 2936466 main.go:176]           and the user is included in the role binding through a group hierarchy: [user:user4@esodemoapp2.com  --> group:group4_7@esodemoapp2.com   --> group:group_of_groups_1@esodemoapp2.com ]
+I0622 09:22:33.566339 2936466 main.go:961]           user:user4@esodemoapp2.com can impersonate impersonated-account@fabled-ray-104117.iam.gserviceaccount.com
+I0622 09:22:33.566360 2936466 main.go:954]           serviceAccount:impersonated-account@fabled-ray-104117.iam.gserviceaccount.com has iam permissions roles/storage.objectViewer  on //storage.googleapis.com/fabled-ray-104117-bucket
+```
+
+- `K`: user can impersonate two service accounts:  one with direct access to a resource, one that impersonates another service account with access to a resource
 
 ```log
 $ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"  \
    --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest \
-   --projectID=fabled-ray-104117 --enableImpersonatedCheck --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
+   --projectID=fabled-ray-104117 --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
 
 I0614 07:07:59.976997 2062996 main.go:116] Getting AnalyzeIamPolicyRequest
 I0614 07:08:02.577478 2062996 main.go:232]       Result written to gs://fabled-ray-104117-bucket/20210614110759
@@ -663,19 +681,19 @@ I0614 07:08:02.813332 2062996 main.go:955]           user:user4@esodemoapp2.com 
 I0614 07:08:02.813362 2062996 main.go:948]           serviceAccount:impersonated-account@fabled-ray-104117.iam.gserviceaccount.com has iam permissions roles/storage.objectViewer  on //storage.googleapis.com/fabled-ray-104117-buck
 ```
 
-- `K`: user can impersonate a service account but that account does not have permissions on the resource
+- `L`: user can impersonate a service account but that account does not have permissions on the resource
 
 ```log
 $ go run main.go   --checkResource="//storage.googleapis.com/fabled-ray-104117-bucket"   --identity="user:user4@esodemoapp2.com"  \
    --scope="projects/fabled-ray-104117"  -v 20 -alsologtostderr   --useIAMPolicyRequest \
-   --projectID=fabled-ray-104117 --enableImpersonatedCheck --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
+   --projectID=fabled-ray-104117 --gcsDestinationForLongRunningAnalysis=gs://fabled-ray-104117-bucket
 
 I0614 07:28:02.485747 2068876 main.go:116] Getting AnalyzeIamPolicyRequest
 I0614 07:28:08.948430 2068876 main.go:232]       Result written to gs://fabled-ray-104117-bucket/20210614112802
 I0614 07:28:09.217923 2068876 main.go:955]           user:user4@esodemoapp2.com can impersonate impersonated-account@fabled-ray-104117.iam.gserviceaccount.com
 ```
 
-- `L`: user is a member of a group which  can impersonate an account which impersonate another account that has access to a resource
+- `M`: user is a member of a group which  can impersonate an account which impersonate another account that has access to a resource
 
 ** Doesn't work **
 
