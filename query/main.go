@@ -577,10 +577,14 @@ func main() {
 			if err != nil {
 				glog.Fatal(err)
 			}
-
+			// these permissions  haven't propagated out yet as of 2/2/22
+			// https://github.com/salrashid123/iam_bq_dataset
 			permstoTest = remove(permstoTest, []string{
 				"storage.objects.getIamPolicy",
 				"storage.objects.setIamPolicy",
+				"storage.buckets.createTagBinding",
+				"storage.buckets.deleteTagBinding",
+				"storage.buckets.listTagBindings",
 				"resourcemanager.resourceTagBindings.create",
 				"resourcemanager.resourceTagBindings.delete",
 				"resourcemanager.resourceTagBindings.list",
