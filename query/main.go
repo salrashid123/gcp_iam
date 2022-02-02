@@ -69,6 +69,7 @@ var (
 
 	usePolicyTroubleshooter              = flag.Bool("usePolicyTroubleshooter", false, "Use policytroubleshooter API to check a given permission (requires admin)")
 	permissionToCheck                    = flag.String("permissionToCheck", "storage.objects.get", "Permission to check using policytroubleshooter API (requires admin)")
+	enableImpersonatedCheck              = flag.Bool("enableImpersonatedCheck", false, "Check for Impersonated credentials (default: false)")
 	gcsDestinationForLongRunningAnalysis = flag.String("gcsDestinationForLongRunningAnalysis", "", "Destination gcs bucket to write LongRunningAnalysis (in format ggs://fabled-ray-104117-bucket)")
 	limiter                              *rate.Limiter
 )
@@ -130,63 +131,57 @@ func main() {
 		// https://cloud.google.com/asset-inventory/docs/resource-name-format
 		// https://cloud.google.com/asset-inventory/docs/supported-asset-types#analyzable_asset_types
 
-		req := &assetpb.AnalyzeIamPolicyRequest{
-			AnalysisQuery: &assetpb.IamPolicyAnalysisQuery{
-				Scope: *scope,
-				ResourceSelector: &assetpb.IamPolicyAnalysisQuery_ResourceSelector{
-					FullResourceName: *checkResource,
+		if *enableImpersonatedCheck == false {
+			req := &assetpb.AnalyzeIamPolicyRequest{
+				AnalysisQuery: &assetpb.IamPolicyAnalysisQuery{
+					Scope: *scope,
+					ResourceSelector: &assetpb.IamPolicyAnalysisQuery_ResourceSelector{
+						FullResourceName: *checkResource,
+					},
+					IdentitySelector: &assetpb.IamPolicyAnalysisQuery_IdentitySelector{
+						Identity: fmt.Sprintf("%s", *identity),
+					},
+					Options: &assetpb.IamPolicyAnalysisQuery_Options{
+						ExpandGroups:                       true,
+						OutputGroupEdges:                   true,
+						ExpandResources:                    true,
+						ExpandRoles:                        true,
+						OutputResourceEdges:                true,
+						AnalyzeServiceAccountImpersonation: *enableImpersonatedCheck, // NOTE, this is verrry expensive, only enable this if necessary.  TODO: use longrunning
+					},
 				},
-				IdentitySelector: &assetpb.IamPolicyAnalysisQuery_IdentitySelector{
-					Identity: fmt.Sprintf("%s", *identity),
-				},
-				Options: &assetpb.IamPolicyAnalysisQuery_Options{
-					ExpandGroups:                       true,
-					OutputGroupEdges:                   true,
-					ExpandResources:                    true,
-					ExpandRoles:                        true,
-					OutputResourceEdges:                true,
-					AnalyzeServiceAccountImpersonation: true,
-				},
-			},
-		}
-		resp, err := assetClient.AnalyzeIamPolicy(ctx, req)
-		if err != nil {
-			err := handleError(err)
+			}
+			resp, err := assetClient.AnalyzeIamPolicy(ctx, req)
 			if err != nil {
-				glog.Fatal(err)
+				err := handleError(err)
+				if err != nil {
+					glog.Fatal(err)
+				}
+				return
 			}
-			return
-		}
-		for _, result := range resp.MainAnalysis.AnalysisResults {
-			for _, acl := range result.AccessControlLists {
-				glog.V(2).Infof("      %s has access to resource %s", *identity, acl.Resources)
-				glog.V(2).Infof("        through %s", acl.Accesses)
+			for _, result := range resp.MainAnalysis.AnalysisResults {
+				for _, acl := range result.AccessControlLists {
+					glog.V(2).Infof("      %s has access to resource %s", *identity, acl.Resources)
+					glog.V(2).Infof("        through %s", acl.Accesses)
 
-			}
-			if result.AttachedResourceFullName == *checkResource {
-				glog.V(2).Info("          which is applied to the resource directly")
-			} else {
-				for _, a := range result.AccessControlLists {
-					glog.V(2).Info("          which is inherited through resource ancestry ", getResourceAncestry(a.ResourceEdges, *checkResource, []string{*checkResource}))
+				}
+				if result.AttachedResourceFullName == *checkResource {
+					glog.V(2).Info("          which is applied to the resource directly")
+				} else {
+					for _, a := range result.AccessControlLists {
+						glog.V(2).Info("          which is inherited through resource ancestry ", getResourceAncestry(a.ResourceEdges, *checkResource, []string{*checkResource}))
+					}
+				}
+				if stringInSlice(*identity, result.IamBinding.Members) {
+					glog.V(2).Info("          and the user is directly included in the role binding directly")
+				} else {
+					glog.V(2).Info("          and the user is included in the role binding through a group hierarchy: ", getIdentityAncestry(result.IdentityList, *identity, []string{*identity}))
 				}
 			}
-			if stringInSlice(*identity, result.IamBinding.Members) {
-				glog.V(2).Info("          and the user is directly included in the role binding directly")
-			} else {
-				glog.V(2).Info("          and the user is included in the role binding through a group hierarchy: ", getIdentityAncestry(result.IdentityList, *identity, []string{*identity}))
+			if len(resp.MainAnalysis.AnalysisResults) == 0 {
+				glog.V(2).Infof("      %s does not access to resource %s", *identity, *checkResource)
 			}
-		}
-		recurseDelegationForResource(*identity, *checkResource, *resp)
-		if len(resp.MainAnalysis.AnalysisResults) == 0 {
-			glog.V(2).Infof("      %s does not access to resource %s", *identity, *checkResource)
-		}
-
-		if resp.MainAnalysis.FullyExplored == false {
-			glog.V(2).Infof("Getting AnalyzeIamPolicyLongrunningRequest")
-
-			if *gcsDestinationForLongRunningAnalysis == "" {
-				glog.Fatal("Please specify GCS bucket flag *gcsDestinationForLongRunningAnalysis")
-			}
+		} else {
 
 			fileName := fmt.Sprintf("%s", time.Now().UTC().Format("20060102150405"))
 			req := &assetpb.AnalyzeIamPolicyLongrunningRequest{
@@ -204,7 +199,7 @@ func main() {
 						ExpandResources:                    true,
 						ExpandRoles:                        true,
 						OutputResourceEdges:                true,
-						AnalyzeServiceAccountImpersonation: true,
+						AnalyzeServiceAccountImpersonation: *enableImpersonatedCheck, // NOTE, this is verrry expensive, only enable this if necessary.  TODO: use longrunning
 					},
 				},
 				OutputConfig: &assetpb.IamPolicyAnalysisOutputConfig{
