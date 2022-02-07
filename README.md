@@ -1,30 +1,50 @@
 
-## GCP IAM Permissions on Resources
 
-Utility scripts for Google Cloud IAM Permission Troubleshooting.
+Google Cloud IAM Troubleshooting scripts intended to provide several indicators of users permissions on GCP resources.
 
-* `map/`:  Export all IAM `Roles->Permissions` and `Permissions->Roles`
-* `query/`: Check which permissions a user has on a GCP Resource.
+* `inspect/query` 
+  - [checkEndUserPermissions](#checkEndUserPermissions)
 
-A sample use for the these two scripts would be as a user to deduce which permissions are lacking and on a resource and then compare the set to a predefined Role that has access.
+    - Allows an end user to ask "of all the permissions this resource accepts, which ones do I have?"
+    - Allows a domain administrator to _impersonate_ any user and inspect which permissions that user has on a resource.
+     
+  - [usePolicyTroubleshooter](#usePolicyTroubleshooter)
 
-For example, a Role `role_1` has Permissions `[a,b,c,d]` on Resource `resource_1`.   A user can issue a query on `resource_1` and ask
- "give me all the permissions this resource supports"
-    The response maybe `[a,b,s,t]`
+     - Use [IAM Policy Troubleshooter](https://cloud.google.com/iam/docs/troubleshooting-access) API to determine if the user has IAM access to a resource. 
+     
+     - Display if [IAM Conditions](https://cloud.google.com/iam/docs/conditions-overview) are applicable.
 
-At this point, you know the Role `role_1` is overprovisioned on `resource_1` since the permission delta is `[c,d]` (since those permissions would never even apply to the resource)
+     - Backtrack the [IAM Resource Hierarchy](https://cloud.google.com/iam/docs/resource-hierarchy-access-control) from the resource to root and display all the IAM Roles present at each node. (`TODO`: display subset of permissions at each node applicable to the target resource)
 
-    
-From there the user can ask 
-  "which of all permissions the resource supports do **I** have:
-    The response maybe `[a,s]`
+  - [useIAMPolicyRequest](#useIAMPolicyRequest)
 
-  If a predefined role or another user that can access the resource has permissions `[a,b,t]`, you would know that the permission missing maybe just `[b,t]` and `[s]` is not necessary to access that resource.
+    - Use [IAM Policy Analyzer](https://cloud.google.com/asset-inventory/docs/analyzing-iam-policy) to help determine if a given user has access to a resource through indirect capabilities:
 
+      - Through nested or direct group memberships bound to the resource
+      - Through [service account impersonation](https://cloud.google.com/iam/docs/creating-short-lived-service-account-credentials) where the service account has direct or indirect access.
+      - Other mechanisms described [here](https://cloud.google.com/asset-inventory/docs/analyzing-iam-policy#overview)
 
-This script also provides a way to recursively determine how a user has access to a resource by traversing *BOTH* the groups hierarchy (eg, user in a group which is in another group) and the resource hierarchy (GCP organization, folder, project, resource)
+* `map/`
 
->> NOTE: this utility is just a way to list and test Roles/Permissions.  It does not account for IAP Context-Aware access, VPC-SC or IAM Conditions
+   The other utility provided here is basically just a forward and reverse map and graph of IAM `Roles->Permissions` and `Permissions->Roles`. Mostly just fun stuff
+
+   See [Google Cloud IAM Roles-Permissions Public Dataset](/articles/2021/iam_bq_dataset/)
+ 
+
+Note that users can have access to resources through various mechanisms and restrictions:
+
+- User has direct IAM binding on the resource 
+- User has indirect access through
+  * [group membership](https://cloud.google.com/iam/docs/groups-in-cloud-console)
+  * [serviceAccount Impersonation](https://cloud.google.com/iam/docs/creating-short-lived-service-account-credentials)
+- User has access through [Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation)
+- Access restricted through [IAM Conditions](https://cloud.google.com/iam/docs/conditions-overview)
+
+Each of these scripts attempts to surface aspects of these access capabilities and restricts.  The intent is to use them to surface the full access scope capability for a user.
+
+> ** This code is NOT supported by Google, really **
+
+> NOTE: this utility is just a way to list and test Roles/Permissions.  It does not account for IAP Context-Aware access, VPC-SC or IAM Conditions
 
 
 ### References
