@@ -27,6 +27,7 @@ import (
 	crmv2 "google.golang.org/api/cloudresourcemanager/v2"
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/iap/v1"
+	"google.golang.org/api/run/v2"
 	"google.golang.org/api/spanner/v1"
 	"google.golang.org/api/storage/v1"
 
@@ -63,6 +64,7 @@ const (
 	resourceManagerOrganizationRegex = "//cloudresourcemanager.googleapis.com/organizations/(.+)"
 	resourceManagerProjectsRegex     = "//cloudresourcemanager.googleapis.com/projects/(.+)"
 	resourceManagerFoldersRegex      = "//cloudresourcemanager.googleapis.com/folders/(.+)"
+	cloudRunRegex                    = "//run.googleapis.com/projects/(.+)/locations/(.+)/services/(.+)"
 
 	// https://cloud.google.com/asset-inventory/docs/supported-asset-types#analyzable_asset_types
 
@@ -77,6 +79,7 @@ const (
 	assetTypeServiceAccount    = "iam.googleapis.com/ServiceAccount"
 	assetTypeServiceAccountKey = "iam.googleapis.com/ServiceAccountKey"
 	assetTypeGCEInstance       = "compute.googleapis.com/Instance"
+	assetTypeCloudRunService   = "run.googleapis.com/Service"
 
 	cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 )
@@ -102,6 +105,8 @@ func init() {
 
 func getPermissions(ctx context.Context, ts oauth2.TokenSource, resource string) ([]string, error) {
 	glog.V(2).Infof("================ QueryTestablePermissions with Resource ======================\n")
+	glog.V(2).Infof("   %s \n ", resource)
+
 	if *checkResource == "" {
 		return nil, errors.New("must specify checkResource")
 	}
@@ -1241,9 +1246,49 @@ func verifyPermissionsAsUser(ctx context.Context, ts oauth2.TokenSource, checkRe
 			"resourcemanager.resourceTagBindings.list",
 			"resourcemanager.hierarchyNodes.createTagBinding",
 			"resourcemanager.hierarchyNodes.deleteTagBinding",
-			"resourcemanager.hierarchyNodes.listTagBindings"})
+			"resourcemanager.hierarchyNodes.listEffectiveTags",
+			"resourcemanager.hierarchyNodes.listTagBindings",
+		})
 
 		ciamResp, err := storageService.Buckets.TestIamPermissions(res[1], permstoTest).Do()
+		if err != nil {
+			glog.V(2).Infof("      Error getting IAM Permissions: %s\n", err)
+
+			err := handleError(err)
+			if err != nil {
+				glog.Fatal(err)
+			}
+			return err
+		}
+		glog.V(2).Infof(" User permission  on resource: \n")
+		for _, p := range ciamResp.Permissions {
+			glog.V(2).Infof("     %s\n", p)
+		}
+	}
+
+	// 	//run.googleapis.com/projects/project-id/locations/location-id/services/service-id
+
+	re = regexp.MustCompile(cloudRunRegex)
+	res = re.FindStringSubmatch(checkResource)
+
+	if len(res) == 4 {
+
+		glog.V(2).Infof("==== TestIAMPermissions as Cloud RUn Resource ====\n")
+
+		var err error
+		var runService *run.Service
+
+		runService, err = run.NewService(ctx, option.WithTokenSource(ts), option.WithScopes(cloudPlatformScope))
+		if err != nil {
+			return err
+		}
+
+		// these permissions  haven't propagated out yet as of 2/2/22
+		// https://github.com/salrashid123/iam_bq_dataset
+		permstoTest = remove(permstoTest, []string{})
+		ciamResp, err := runService.Projects.Locations.Services.TestIamPermissions(fmt.Sprintf("projects/%s/locations/%s/services/%s", res[1], res[2], res[3]), &run.GoogleIamV1TestIamPermissionsRequest{
+			Permissions: permstoTest,
+		}).Do()
 		if err != nil {
 			glog.V(2).Infof("      Error getting IAM Permissions: %s\n", err)
 

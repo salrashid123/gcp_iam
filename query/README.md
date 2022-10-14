@@ -170,6 +170,7 @@ const computeInstanceRegex untyped string = "//compute.googleapis.com/projects/(
 const computeSubNetworksRegex untyped string = "//compute.googleapis.com/projects/(.+)/regions/(.+)/subnetworks/(.+)"
 const resourceManagerOrganizationRegex untyped string = "//cloudresourcemanager.googleapis.com/organizations/(.+)"
 const resourceManagerProjectsRegex untyped string = "//cloudresourcemanager.googleapis.com/projects/(.+)"
+const cloudRunRegex string  = "//run.googleapis.com/projects/(.+)/locations/(.+)/services/(.+)"
 ```
 
 ##### checkEndUserPermissions Caveats
@@ -378,6 +379,13 @@ There are a few other resource types supported for this utility:
 
 ```bash
 --checkResource="//compute.googleapis.com/projects/fabled-ray-104117/zones/us-central1-a/instances/instance-1"
+--permissionToCheck=compute.instances.get    --identity="user:user4@esodemoapp2.com"
+```
+
+- `Cloud Run`
+
+```bash
+--checkResource="//run.googleapis.com/projects/fabled-ray-104117/locations/us-central1/services/myapp"
 --permissionToCheck=compute.instances.get    --identity="user:user4@esodemoapp2.com"
 ```
 
